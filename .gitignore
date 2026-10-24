@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+FlowLocal.app/
+*.xcodeproj
+.DS_Store
+# local models and data never belong in the repo
+*.bin
+*.gguf
+history.jsonl
+# private working notes (reverse-engineering analysis of a third-party app)
+wispr-flow-findings.md
