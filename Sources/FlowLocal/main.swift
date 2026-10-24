@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ocrTask: Task<String, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MainMenu.install()
         setIcon(active: false)
         rebuildMenu()
         requestPermissions()

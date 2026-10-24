@@ -14,7 +14,13 @@ enum TextInserter {
         pb.setString(text, forType: .string)
         let ourChange = pb.changeCount
 
-        postCmd(vKey)
+        // Dictating into our own window (Hub, Scratchpad): hand the paste straight to the focused text view
+        // instead of relying on a synthetic ⌘V round trip through the menu bar.
+        if NSApp.isActive, NSApp.keyWindow?.firstResponder is NSText {
+            NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+        } else {
+            postCmd(vKey)
+        }
 
         // Give the target app time to read the pasteboard before restoring it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
