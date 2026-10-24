@@ -12,6 +12,8 @@ final class HotkeyMonitor {
 
     private var monitor: Any?
     private var keyMonitor: Any?
+    /// Global monitors never see events delivered to our own windows (Hub, Scratchpad), so mirror them locally.
+    private var localMonitors: [Any] = []
     /// The mode whose key is currently held; the other key is ignored until it is released.
     private var active: Mode?
 
@@ -23,6 +25,13 @@ final class HotkeyMonitor {
         keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.onCancel?() }
         }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
+            self?.handle(event); return event
+        }) { localMonitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
+            if event.keyCode == 53 { self?.onCancel?() }
+            return event
+        }) { localMonitors.append(m) }
         Log.write("hotkey monitor \(monitor == nil ? "FAILED to install" : "installed")")
     }
 
@@ -31,6 +40,8 @@ final class HotkeyMonitor {
         monitor = nil
         if let k = keyMonitor { NSEvent.removeMonitor(k) }
         keyMonitor = nil
+        localMonitors.forEach { NSEvent.removeMonitor($0) }
+        localMonitors = []
         active = nil
     }
 
