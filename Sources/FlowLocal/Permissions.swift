@@ -16,7 +16,7 @@ enum Permission: String, CaseIterable, Identifiable {
         switch self {
         case .microphone: return "Microfone"
         case .accessibility: return "Acessibilidade"
-        case .inputMonitoring: return "Monitoramento de Entrada"
+        case .inputMonitoring: return "Monitoramento de Entrada (opcional)"
         case .screenRecording: return "Gravação de Tela"
         }
     }
@@ -35,7 +35,7 @@ enum Permission: String, CaseIterable, Identifiable {
         switch self {
         case .microphone: return "Para ouvir sua voz enquanto você segura a tecla de ditado."
         case .accessibility: return "Para colar o texto no app em foco e ler o campo de texto e a seleção."
-        case .inputMonitoring: return "Para perceber quando você aperta e solta a tecla de ditado em qualquer app."
+        case .inputMonitoring: return "Opcional: só habilita a tecla Esc para cancelar uma gravação. O ditado funciona sem ela."
         case .screenRecording: return "Só para a leitura opcional da tela (OCR). Tudo é processado no seu Mac."
         }
     }
@@ -60,9 +60,10 @@ enum Permission: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Steps the guide walks through, in order. Screen Recording only matters when OCR is switched on.
+    /// Steps the guide walks through, in order. Input Monitoring is not required: the modifier-key hotkey works
+    /// without it (verified in the log); it only adds Esc-to-cancel. Screen Recording only matters with OCR on.
     static var guideSteps: [Permission] {
-        [.microphone, .accessibility, .inputMonitoring] + (Settings.screenOCR ? [.screenRecording] : [])
+        [.microphone, .accessibility] + (Settings.screenOCR ? [.screenRecording] : [])
     }
 
     /// Triggers the system prompt where macOS offers one, and opens the matching pane.

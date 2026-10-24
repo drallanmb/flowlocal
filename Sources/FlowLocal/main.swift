@@ -55,6 +55,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         HubWindow.shared.show()
+
+        // Where did macOS put the menu bar item? (An item with no room, or switched off in Settings → Menu Bar, has no usable frame.)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self else { return }
+            let b = self.statusItem.button
+            if let b, let rep = b.bitmapImageRepForCachingDisplay(in: b.bounds) {
+                b.cacheDisplay(in: b.bounds, to: rep)
+                var inked = 0
+                for y in 0..<rep.pixelsHigh { for x in 0..<rep.pixelsWide where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.1 { inked += 1 } }
+                Log.write("status button render: \(rep.pixelsWide)x\(rep.pixelsHigh) px, \(inked) inked")
+                try? rep.representation(using: .png, properties: [:])?.write(to: Paths.support.appendingPathComponent("statusbutton.png"))
+            }
+            Log.write("status item: visible=\(self.statusItem.isVisible) image=\(String(describing: b?.image?.size)) windowFrame=\(String(describing: b?.window?.frame)) screens=\(NSScreen.screens.map(\.frame))")
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) { whisper.stop(); polisher.stop() }
