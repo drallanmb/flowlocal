@@ -24,12 +24,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSScreenCaptureUsageDescription</key><string>FlowLocal lê o texto da janela em foco (OCR local) para acertar nomes e termos.</string>
   <key>NSMicrophoneUsageDescription</key><string>FlowLocal grava sua voz para transcrever localmente.</string>
 </dict></plist>
 PLIST
 
-# Ad-hoc signature so macOS keeps the granted permissions between rebuilds of the same bundle id.
-codesign --force --sign - --identifier local.flowlocal.app "$APP"
+# A fixed designated requirement (bundle id only) keeps the Accessibility / Input Monitoring / Microphone grants
+# valid across rebuilds; the default ad-hoc requirement pins the exact binary hash, so every rebuild silently revokes them.
+codesign --force --sign - --identifier local.flowlocal.app -r='designated => identifier "local.flowlocal.app"' "$APP"
 echo "Built $(pwd)/$APP"

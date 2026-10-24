@@ -123,6 +123,59 @@ private struct Sidebar: View {
     }
 }
 
+// MARK: - Permission guide (one step at a time)
+
+private struct PermissionGuide: View {
+    @ObservedObject private var model = PermissionsModel.shared
+
+    var body: some View {
+        if let step = model.currentStep {
+            let steps = Permission.guideSteps
+            let index = (steps.firstIndex(of: step) ?? 0) + 1
+            Card {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Configuração inicial · passo \(index) de \(steps.count)")
+                        .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+
+                    HStack(spacing: 14) {
+                        ForEach(steps) { p in
+                            let done = model.granted[p] == true
+                            HStack(spacing: 5) {
+                                Image(systemName: done ? "checkmark.circle.fill" : (p == step ? "circle.inset.filled" : "circle"))
+                                    .foregroundStyle(done ? Color.green : (p == step ? Color.accentColor : Color.secondary))
+                                Text(p.title).font(.caption)
+                                    .foregroundStyle(p == step ? Color.primary : Color.secondary)
+                            }
+                        }
+                    }
+
+                    Text(step.title).font(.headline)
+                    Text(step.why).font(.callout).foregroundStyle(.secondary)
+                    Text(instructions(for: step))
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 12) {
+                        Button("Abrir ajustes: \(step.title)") { step.request() }
+                            .buttonStyle(.borderedProminent)
+                        Label("Aguardando você ativar…", systemImage: "hourglass")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func instructions(for step: Permission) -> String {
+        var text = "1. Clique no botão abaixo.\n2. Em \(step.pane), ligue o interruptor de “FlowLocal”.\n3. Volte aqui: o passo é marcado ✓ sozinho assim que o macOS confirmar."
+        if step == .microphone && AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            text = "1. Clique no botão abaixo: o macOS vai mostrar um aviso.\n2. Clique em “Permitir”.\n3. Este passo é marcado ✓ sozinho."
+        }
+        if step == .screenRecording { text += "\nO macOS pode pedir para reabrir o FlowLocal; aceite." }
+        return text
+    }
+}
+
 // MARK: - Home (history)
 
 private struct HomePage: View {
@@ -152,6 +205,8 @@ private struct HomePage: View {
             VStack(alignment: .leading, spacing: 18) {
                 PageHeader(title: "Início", subtitle: "Segure \(Settings.hotkey.title), fale e solte.")
                     .padding(.top, 32)
+
+                PermissionGuide()
 
                 Text("\(store.entries.count) ditados  ·  \(store.totalWords) palavras  ·  \(store.wpm) palavras/min")
                     .font(.footnote).foregroundStyle(.tertiary)
@@ -397,13 +452,13 @@ private struct SettingsPage: View {
     @AppStorage("cleanFillers") private var cleanFillers = true
     @AppStorage("llmEnabled") private var llmEnabled = true
     @AppStorage("llmModel") private var llmModel = "qwen2.5:3b-instruct"
+    @AppStorage("handsFree") private var handsFree = true
+    @AppStorage("fieldContext") private var fieldContext = true
+    @AppStorage("screenOCR") private var screenOCR = false
 
     @LState private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @LState private var loginError: String?
-    @LState private var mic = AVCaptureDevice.authorizationStatus(for: .audio)
-    @LState private var ax = AXIsProcessTrusted()
-    @LState private var input = CGPreflightListenEventAccess()
-    private let poll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    @ObservedObject private var perms = PermissionsModel.shared
 
     private var models: [String] {
         let found = (try? FileManager.default.contentsOfDirectory(atPath: Paths.models.path))?.filter { $0.hasSuffix(".bin") }.sorted() ?? []
@@ -454,26 +509,40 @@ private struct SettingsPage: View {
                         Toggle("", isOn: $launchAtLogin).labelsHidden()
                             .onChange(of: launchAtLogin) { setLaunchAtLogin($0) }
                     }
+                    row("Diagnóstico", "Teclas, permissões e erros do app (nunca o texto ditado).") {
+                        Button("Abrir log") { NSWorkspace.shared.open(Log.url) }
+                    }
                     row("Pasta de dados", "Histórico, dicionário, snippets e modelos.") {
                         Button("Mostrar no Finder") { NSWorkspace.shared.activateFileViewerSelecting([Paths.support]) }
                     }
                 }
 
+                section("Contexto e modos") {
+                    row("Mãos livres", "Um toque rápido na tecla mantém a gravação ligada; toque de novo para finalizar. Esc cancela.") {
+                        Toggle("", isOn: $handsFree).labelsHidden()
+                    }
+                    row("Contexto do campo de texto", "Lê o texto ao redor do cursor e o título da janela (Acessibilidade) para acertar nomes, maiúsculas e espaços.") {
+                        Toggle("", isOn: $fieldContext).labelsHidden()
+                    }
+                    row("Ler a tela (OCR)", "Reconhece o texto da janela em foco enquanto você fala. Mais lento; exige Gravação de Tela.") {
+                        Toggle("", isOn: $screenOCR).labelsHidden()
+                            .onChange(of: screenOCR) { on in if on { ScreenContext.warmUpOCR() } }
+                    }
+                }
+
                 section("Permissões") {
-                    permission("Microfone", mic == .authorized,
-                               "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-                    permission("Acessibilidade (colar texto)", ax,
-                               "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-                    permission("Monitoramento de entrada (tecla de ditado)", input,
-                               "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+                    ForEach(Permission.allCases.filter { $0 != .screenRecording || screenOCR }) { p in
+                        HStack {
+                            Image(systemName: perms.granted[p] == true ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(perms.granted[p] == true ? Color.green : Color.orange)
+                            Text(p.title)
+                            Spacer()
+                            if perms.granted[p] != true { Button("Ativar") { p.request() } }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 32).padding(.bottom, 32).frame(maxWidth: 680).frame(maxWidth: .infinity)
-        }
-        .onReceive(poll) { _ in
-            mic = AVCaptureDevice.authorizationStatus(for: .audio)
-            ax = AXIsProcessTrusted()
-            input = CGPreflightListenEventAccess()
         }
     }
 

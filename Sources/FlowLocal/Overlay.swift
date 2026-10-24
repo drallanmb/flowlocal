@@ -7,7 +7,7 @@ final class Overlay {
     private let dot = NSView()
 
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 190, height: 36),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 36),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -29,7 +29,7 @@ final class Overlay {
         dot.layer?.cornerRadius = 6
         bg.addSubview(dot)
 
-        label.frame = NSRect(x: 34, y: 8, width: 148, height: 20)
+        label.frame = NSRect(x: 34, y: 8, width: 258, height: 20)
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.textColor = .labelColor
         bg.addSubview(label)

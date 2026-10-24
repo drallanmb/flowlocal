@@ -15,18 +15,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mode: HotkeyMonitor.Mode = .dictation
     /// Text selected when the command key went down (empty = write new text from the instruction).
     private var commandSelection = ""
+    /// Hands-free: a quick tap latches recording on; the next tap finishes it.
+    private var latched = false
+    private var pressedAt = Date()
+    private var swallowRelease = false
+    private var latchToken = 0
+    /// Screen context captured when the hotkey went down (field text via Accessibility; OCR runs while you speak).
+    private var contextAtStart: ScreenContext?
+    private var ocrTask: Task<String, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setIcon(active: false)
         rebuildMenu()
         requestPermissions()
+        Log.write("launch: accessibility=\(AXIsProcessTrusted()) inputMonitoring=\(CGPreflightListenEventAccess()) mic=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue) dictationKey=\(Settings.hotkey) commandKey=\(String(describing: Settings.commandHotkey)) bundle=\(Bundle.main.bundlePath)")
 
         recorder.onLevel = { [weak self] in self?.overlay.setLevel($0) }
-        hotkey.onPress = { [weak self] in self?.beginDictation($0) }
-        hotkey.onRelease = { [weak self] _ in self?.endDictation() }
+        hotkey.onPress = { [weak self] in self?.hotkeyPressed($0) }
+        hotkey.onRelease = { [weak self] in self?.hotkeyReleased($0) }
+        hotkey.onCancel = { [weak self] in self?.cancelRecording() }
         hotkey.start()
         if Settings.llmEnabled || Settings.commandHotkey != nil { polisher.prepare() }
         startWhisper()
+        if Settings.screenOCR { ScreenContext.warmUpOCR() }
 
         // The Hub edits UserDefaults directly; keep the menu and background services in sync.
         let nc = NotificationCenter.default
@@ -34,6 +45,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nc.addObserver(forName: .restartWhisper, object: nil, queue: .main) { [weak self] _ in self?.startWhisper() }
         nc.addObserver(forName: .reloadLLM, object: nil, queue: .main) { [weak self] _ in
             if Settings.llmEnabled || Settings.commandHotkey != nil { self?.polisher.prepare() }
+        }
+
+        // A key monitor created before Input Monitoring / Accessibility were granted receives nothing; recreate it.
+        nc.addObserver(forName: .permissionsChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.hotkey.start()
+            if PermissionsModel.shared.currentStep == nil { self?.setStatus("Pronto — segure \(Settings.hotkey.title)") }
+            else { self?.requestPermissions() }
         }
 
         HubWindow.shared.show()
@@ -52,21 +70,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         whisper.start { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
-                case .success: self?.setStatus("Pronto — segure \(Settings.hotkey.title)")
-                case .failure(let e): self?.setStatus("Erro: \(e.localizedDescription)")
+                case .success: Log.write("whisper-server ready"); self?.setStatus("Pronto — segure \(Settings.hotkey.title)")
+                case .failure(let e): Log.write("whisper-server failed: \(e.localizedDescription)"); self?.setStatus("Erro: \(e.localizedDescription)")
                 }
             }
         }
     }
 
+    // MARK: Hotkey state machine (push-to-talk + hands-free)
+
+    private func hotkeyPressed(_ mode: HotkeyMonitor.Mode) {
+        if recorder.isRecording && latched {
+            // Second tap while hands-free: finish now and ignore the release that follows.
+            latched = false
+            swallowRelease = true
+            endDictation()
+            return
+        }
+        pressedAt = Date()
+        beginDictation(mode)
+    }
+
+    private func hotkeyReleased(_ mode: HotkeyMonitor.Mode) {
+        if swallowRelease { swallowRelease = false; return }
+        guard recorder.isRecording else { return }
+        if Settings.handsFree, Date().timeIntervalSince(pressedAt) < 0.3 {
+            latched = true
+            overlay.show("Mãos livres: toque para finalizar · Esc cancela", color: .systemRed)
+            // Safety net: never record forever if the user walks away.
+            latchToken += 1
+            let token = latchToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + 600) { [weak self] in
+                guard let self, self.latched, self.latchToken == token else { return }
+                self.latched = false
+                self.endDictation()
+            }
+            return
+        }
+        endDictation()
+    }
+
+    private func cancelRecording() {
+        guard recorder.isRecording else { return }
+        _ = recorder.stop()
+        latched = false
+        ocrTask?.cancel()
+        setIcon(active: false)
+        Log.write("recording cancelled with Esc")
+        overlay.show("Cancelado", color: .systemGray)
+        overlay.hide(after: 1)
+    }
+
     // MARK: Dictation flow
 
     private func beginDictation(_ mode: HotkeyMonitor.Mode) {
+        Log.write("begin \(mode) whisperReady=\(whisper.isReady)")
         guard whisper.isReady else { overlay.show("Carregando modelo…", color: .systemOrange); overlay.hide(after: 1.5); return }
         do {
             // Our own windows (Hub) count too: dictating into the Scratchpad is a supported use.
             targetApp = NSWorkspace.shared.frontmostApplication
             self.mode = mode
+            // Context is read now, while the target app still has focus. OCR runs in the background during recording.
+            contextAtStart = nil
+            ocrTask?.cancel(); ocrTask = nil
+            if mode == .dictation {
+                if Settings.fieldContext { contextAtStart = ScreenContext.fromAccessibility(app: targetApp) }
+                if Settings.screenOCR, let app = targetApp, app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                    ocrTask = Task { await ScreenContext.ocr(app: app) }
+                }
+            }
             // The selection must be read before recording: the target app still has focus and its selection intact.
             commandSelection = mode == .command ? SelectionReader.read() : ""
             try recorder.start()
@@ -77,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlay.show("Ouvindo…", color: .systemRed)
             }
         } catch {
+            Log.write("recorder start failed: \(error.localizedDescription)")
             overlay.show("Sem microfone", color: .systemOrange); overlay.hide(after: 2)
         }
     }
@@ -85,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard recorder.isRecording else { return }
         let samples = recorder.stop()
         setIcon(active: false)
+        Log.write("end: \(samples.count) samples (\(String(format: "%.1f", Double(samples.count) / 16_000)) s), peak=\(samples.map { abs($0) }.max() ?? 0)")
 
         // Ignore accidental taps (< 0.4 s of audio).
         guard samples.count > 6_400 else { overlay.hide(); return }
@@ -102,32 +176,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        let startContext = contextAtStart
+        let pendingOCR = ocrTask
         Task {
             do {
-                let raw = try await whisper.transcribe(wav: wav, language: language, prompt: hint)
+                var context = startContext ?? ScreenContext(appName: appName)
+                if let pendingOCR { context.ocr = await ScreenContext.result(of: pendingOCR, timeout: 1.5) }
+                if !context.isEmpty { Log.write("context: field=\(context.before.count)+\(context.after.count) chars, ocr=\(context.ocr.count) chars, terms=\(context.terms.count)") }
+                let raw = try await whisper.transcribe(wav: wav, language: language, prompt: hint + context.whisperHint)
                 let (expanded, usedSnippet) = SnippetStore.apply(to: TextCleaner.clean(raw))
                 var polished = expanded
                 // Snippet expansions are verbatim text the user wrote; keep the LLM away from them.
                 if Settings.llmEnabled, !expanded.isEmpty, !usedSnippet {
                     overlay.show("Polindo…", color: .systemPurple)
-                    polished = await polisher.polish(expanded, dictionaryTerms: TextCleaner.dictionaryTerms(), tone: tone)
+                    polished = await polisher.polish(expanded, dictionaryTerms: TextCleaner.dictionaryTerms(), tone: tone, context: context)
                 }
-                let text = polished
+                let text = Settings.fieldContext
+                    ? ContextFit.fit(polished, to: context, knownTerms: TextCleaner.dictionaryTerms() + context.terms)
+                    : polished
                 await MainActor.run {
                     if text.isEmpty {
                         overlay.show("Nada detectado", color: .systemGray); overlay.hide(after: 1.2)
                     } else {
-                        TextInserter.insert(text)
-                        overlay.hide()
+                        Log.write("dictation ok: \(text.count) chars")
+                        deliver(text)
                         History.append(raw: raw, text: text, seconds: seconds, app: appName)
                     }
                 }
             } catch {
+                Log.write("dictation failed: \(error.localizedDescription)")
                 await MainActor.run {
                     overlay.show("Falha: \(error.localizedDescription)", color: .systemRed)
                     overlay.hide(after: 3)
                 }
             }
+        }
+    }
+
+    /// Pastes into the focused app; without Accessibility the synthetic Cmd+V is silently dropped, so keep the text on the clipboard instead.
+    private func deliver(_ text: String) {
+        if AXIsProcessTrusted() {
+            TextInserter.insert(text)
+            overlay.hide()
+        } else {
+            Log.write("paste skipped: accessibility not granted, text left on clipboard")
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            overlay.show("Sem Acessibilidade — texto copiado (⌘V)", color: .systemOrange)
+            overlay.hide(after: 4)
         }
     }
 
@@ -150,8 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     History.append(raw: instruction, text: result, seconds: seconds, app: appName, kind: "command")
                     if NSWorkspace.shared.frontmostApplication?.processIdentifier == target?.processIdentifier {
                         // The selection is still active in the target, so pasting replaces it (Cmd+Z undoes).
-                        TextInserter.insert(result)
-                        overlay.hide()
+                        deliver(result)
                     } else {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(result, forType: .string)
@@ -170,13 +265,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Permissions
 
+    /// Permissions are requested one at a time by the guide in the Hub, never all at once at launch.
     private func requestPermissions() {
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        if !AXIsProcessTrustedWithOptions(opts) {
-            setStatus("Conceda Acessibilidade em Ajustes do Sistema e reabra o app")
+        if let step = PermissionsModel.shared.currentStep {
+            setStatus("Falta liberar \(step.title): abra o Hub e siga o passo a passo")
         }
-        CGRequestListenEventAccess()
     }
 
     // MARK: Menu (compact; the Hub holds the full settings)

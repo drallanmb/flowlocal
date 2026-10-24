@@ -63,6 +63,24 @@ struct Settings {
         set { d.set(newValue, forKey: "cleanFillers") }
     }
 
+    /// Quick tap on the hotkey latches recording on (hands-free); tap again to finish.
+    static var handsFree: Bool {
+        get { d.object(forKey: "handsFree") as? Bool ?? true }
+        set { d.set(newValue, forKey: "handsFree") }
+    }
+
+    /// Read the focused text field (before/after the caret) and window title through Accessibility.
+    static var fieldContext: Bool {
+        get { d.object(forKey: "fieldContext") as? Bool ?? true }
+        set { d.set(newValue, forKey: "fieldContext") }
+    }
+
+    /// OCR the focused window while you speak (needs Screen Recording permission).
+    static var screenOCR: Bool {
+        get { d.object(forKey: "screenOCR") as? Bool ?? false }
+        set { d.set(newValue, forKey: "screenOCR") }
+    }
+
     static var llmEnabled: Bool {
         get { d.object(forKey: "llmEnabled") as? Bool ?? true }
         set { d.set(newValue, forKey: "llmEnabled") }
