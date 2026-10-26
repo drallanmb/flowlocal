@@ -9,3 +9,9 @@ FlowLocal.app/
 history.jsonl
 # private working notes (reverse-engineering analysis of a third-party app)
 wispr-flow-findings.md
+
+# .NET
+bin/
+obj/
+*.user
+publish/

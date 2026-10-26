@@ -1,0 +1,36 @@
+name: Windows build
+
+on:
+  push:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Cleaner, context fitting, prompts, stores: the logic shared with the macOS behaviour.
+      - name: Test Core
+        run: dotnet test windows/tests/FlowLocal.Core.Tests -c Release
+
+      # A single self-contained exe: no .NET install needed on the target PC.
+      - name: Publish app
+        run: >
+          dotnet publish windows/src/FlowLocal.App -c Release -r win-x64
+          --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlowLocal-win-x64
+          path: |
+            publish/FlowLocal.exe
+            windows/scripts/setup.ps1

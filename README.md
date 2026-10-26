@@ -45,5 +45,8 @@ Janela principal (abre ao iniciar e ao clicar no Dock; fechar volta ao modo só 
 ## Ainda não existe (vs. Wispr)
 Reuniões e notas (captura do áudio do sistema).
 
+## Windows
+Há uma versão para Windows em C#/.NET na pasta [`windows/`](windows/) (veja o [README dela](windows/README.md)).
+
 ## Licença e aviso
 MIT (veja `LICENSE`). FlowLocal é um projeto independente, inspirado no fluxo de ditado do Wispr Flow, e **não tem afiliação** com a Wispr. Todo o código, o ícone e os textos foram escritos do zero; nenhum código, asset ou serviço do Wispr é usado ou necessário.
