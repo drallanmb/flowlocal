@@ -1,6 +1,6 @@
 .build/
 .swiftpm/
-FlowLocal.app/
+/FlowLocal.app/
 *.xcodeproj
 .DS_Store
 # local models and data never belong in the repo
